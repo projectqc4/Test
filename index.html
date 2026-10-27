@@ -872,6 +872,14 @@ function fetchInitialData(isManualRefresh = false) {
     };
 
     const handleError = () => {
+        // หากเคยแคชข้อมูลไว้ ให้กู้คืนข้อมูลขึ้นมาก่อน แล้วค่อยแสดงสถานะ Error
+        const cached = localStorage.getItem('v3_system_cache');
+        if (cached) {
+            try {
+                let parsed = JSON.parse(cached);
+                applyData(parsed);
+            } catch(e) {}
+        }
         updateConnectionStatus('error');
         if (isManualRefresh) {
             alert('ไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้ในขณะนี้ กรุณาตรวจสอบอินเทอร์เน็ตหรือรีเฟรช');
