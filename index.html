@@ -335,7 +335,7 @@
 
         <!-- ปุ่มคำนวณ และ ล้างข้อมูล -->
         <div class="mt-6 flex flex-col md:flex-row justify-center items-center gap-4">
-            <button id="btnCalculateMain" onclick="calculateFreight(true)" class="bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-base px-10 py-3.5 rounded-full font-bold hover:shadow-lg hover:scale-[1.02] transition transform duration-200 w-full md:w-auto flex items-center justify-center gap-2 cursor-pointer shadow-md">
+            <button id="btnCalculateMain" onclick="calculateFreight(true)" class="bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-base px-10 py-3.5 rounded-full font-bold hover:shadow-lg hover:scale-[1.02] transition transform duration-200 w-full md:w-auto flex items-center justify-center gap-2 cursor-pointer">
                 <span>🚀 คำนวณพิกัดบรรทุกและค่าใช้จ่าย</span>
                 <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">(บันทึกส่วนกลางอัตโนมัติ)</span>
             </button>
@@ -625,7 +625,7 @@ const productData = [
 ];
 
 /**
- * ฟังก์ชันคำนวณ Index ของช่วงราคาน้ำมัน 12 ช่วง (28.01 - 64.00 บาท)
+ * คำนวณ Index ของช่วงราคาน้ำมัน 12 ช่วง (28.01 - 64.00 บาท)
  */
 function getFuelPriceIndex(fuel) {
     let f = parseFloat(fuel);
@@ -661,50 +661,6 @@ function onFuelPriceChange() {
     calculateFreight(false);
 }
 
-/**
- * ปรับปรุงการส่ง Request ไปยัง Google Apps Script เมื่อรันบน Production Web Hosting
- * ป้องกันการเกิด CORS Preflight / 302 Redirection Error อย่างเด็ดขาด
- */
-async function sendToBackend(payload) {
-    // 1. ลองส่งแบบ fetch มาตรฐาน (โหมด POST text/plain ไม่เกิด preflight)
-    try {
-        const response = await fetch(GOOGLE_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-        const res = await response.json();
-        return res;
-    } catch(err1) {
-        // 2. ถ้าติดปัญหา CORS บน Web Hosting ให้ใช้เทคนิค GET-JSONP Fallback
-        return new Promise((resolve, reject) => {
-            const cbName = 'post_cb_' + new Date().getTime();
-            const script = document.createElement('script');
-            const encodedPayload = encodeURIComponent(JSON.stringify(payload));
-
-            window[cbName] = function(data) {
-                try { delete window[cbName]; } catch(e) {}
-                if (script.parentNode) script.parentNode.removeChild(script);
-                resolve(data);
-            };
-
-            script.src = GOOGLE_SCRIPT_URL + '?action=' + (payload.action || 'post') + '&payload=' + encodedPayload + '&callback=' + cbName;
-            script.onerror = function() {
-                try { delete window[cbName]; } catch(e) {}
-                if (script.parentNode) script.parentNode.removeChild(script);
-                // 3. Fallback สุดท้าย: ส่งแบบ No-CORS เพื่อให้ Data บันทึกลง Sheet สำเร็จแน่นอน
-                fetch(GOOGLE_SCRIPT_URL, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    body: JSON.stringify(payload)
-                }).then(() => resolve({ status: 'success' })).catch(reject);
-            };
-
-            document.head.appendChild(script);
-        });
-    }
-}
-
 function handleLogin(e) {
     e.preventDefault();
     const u = document.getElementById('loginUsername').value;
@@ -715,16 +671,22 @@ function handleLogin(e) {
     btn.disabled = true;
     btn.innerText = 'กำลังเข้าสู่ระบบ...';
 
-    sendToBackend({ action: 'login', username: u, password: p })
+    fetch(GOOGLE_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'login', username: u, password: p }),
+        redirect: 'follow'
+    })
+    .then(r => r.json())
     .then(res => {
         btn.disabled = false;
         btn.innerText = '🔒 เข้าสู่ระบบ';
-        if (res && res.status === 'success') {
+        if (res.status === 'success') {
             currentUser = res.user;
             localStorage.setItem('v3_user_session', JSON.stringify(currentUser));
             applyUserSession();
         } else {
-            err.innerText = (res && res.message) ? res.message : 'เข้าสู่ระบบไม่สำเร็จ';
+            err.innerText = res.message || 'เข้าสู่ระบบไม่สำเร็จ';
             err.classList.remove('hidden');
         }
     })
@@ -777,7 +739,7 @@ function applyUserSession() {
 
 /**
  * อัปเดตสถานะการเชื่อมต่อฐานข้อมูลส่วนกลางบนหน้าจอ
- * ล็อกการคำนวณราคาจริงหากยังเชื่อมต่อไม่สำเร็จ
+ * ล็อกปุ่มคำนวณราคาเด็ดขาดหากยังเชื่อมต่อไม่สำเร็จจริง
  */
 function updateConnectionStatus(state) {
     const badge = document.getElementById('dbStatusBadge');
@@ -789,13 +751,12 @@ function updateConnectionStatus(state) {
         if (btnCalc) {
             btnCalc.classList.add('opacity-50', 'cursor-not-allowed');
             btnCalc.disabled = true;
-            btnCalc.setAttribute('title', 'ระบบยังไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้ จะไม่สามารถคำนวณราคาได้');
+            btnCalc.setAttribute('title', 'ระบบกำลังเชื่อมต่อฐานข้อมูลส่วนกลาง กรุณารอสักครู่');
         }
     } else if (state === 'ready') {
         isDatabaseReady = true;
         badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300';
         badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500"></span> ฐานข้อมูลเชื่อมต่อสมบูรณ์ (พร้อมคำนวณ)';
-        badge.onclick = null;
         if (btnCalc) {
             btnCalc.classList.remove('opacity-50', 'cursor-not-allowed');
             btnCalc.disabled = false;
@@ -804,12 +765,12 @@ function updateConnectionStatus(state) {
     } else if (state === 'error') {
         isDatabaseReady = false;
         badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300 cursor-pointer';
-        badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-rose-500"></span> การเชื่อมต่อขัดข้อง (คลิกเพื่อเชื่อมต่อใหม่)';
+        badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-rose-500"></span> การเชื่อมต่อขัดข้อง (คลิกเพื่อลองใหม่)';
         badge.onclick = () => fetchInitialData(true);
         if (btnCalc) {
             btnCalc.classList.add('opacity-50', 'cursor-not-allowed');
             btnCalc.disabled = true;
-            btnCalc.setAttribute('title', 'การเชื่อมต่อขัดข้อง ไม่สามารถคำนวณราคาได้');
+            btnCalc.setAttribute('title', 'ไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้ จึงยังไม่สามารถคำนวณได้');
         }
     }
 }
@@ -852,105 +813,82 @@ function setupRestrictedDropdowns() {
 }
 
 /**
- * ระบบดึงข้อมูลส่วนกลางแบบ Dual-Engine Connection
- * แก้ปัญหาการเปิดบน Web Hosting แล้วเชื่อมต่อขัดข้อง 100%
+ * ปรับปรุงการเชื่อมต่อฐานข้อมูลส่วนกลางให้รองรับเมื่ออัปโหลดขึ้นเว็บเซิร์ฟเวอร์จริง (CORS & Web Hosting Robustness)
  */
 function fetchInitialData(isManualRefresh = false) {
     updateConnectionStatus('connecting');
 
-    const handleSuccess = (res) => {
-        if (!res || (typeof res !== 'object')) {
-            throw new Error('รูปแบบข้อมูลจากเซิร์ฟเวอร์ไม่ถูกต้อง');
-        }
-        localStorage.setItem('v3_system_cache', JSON.stringify(res));
+    const cacheKey = 'v3_system_cache';
+    const cachedData = localStorage.getItem(cacheKey);
+    let hasLoadedCache = false;
+
+    if (cachedData && !isManualRefresh) {
+        try {
+            applyData(JSON.parse(cachedData));
+            hasLoadedCache = true;
+        } catch(e) {}
+    }
+
+    const t = new Date().getTime();
+    const fetchUrl = `${GOOGLE_SCRIPT_URL}?action=getData&_t=${t}`;
+
+    // รองรับ redirect: 'follow' และ fallback ด้วย JSONP ในกรณีที่ Web Hosting ถูกจำกัดเรื่อง CORS
+    fetch(fetchUrl, {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'no-store',
+        redirect: 'follow'
+    })
+    .then(r => {
+        if (!r.ok) throw new Error('Network error: ' + r.status);
+        return r.json();
+    })
+    .then(res => {
+        localStorage.setItem(cacheKey, JSON.stringify(res));
         applyData(res);
         updateConnectionStatus('ready');
         if (isManualRefresh) {
             renderHistoryTable(globalHistory);
             alert('อัปเดตข้อมูลจากส่วนกลางเรียบร้อยแล้ว');
         }
-    };
-
-    const handleError = () => {
-        // หากเคยแคชข้อมูลไว้ ให้กู้คืนข้อมูลขึ้นมาก่อน แล้วค่อยแสดงสถานะ Error
-        const cached = localStorage.getItem('v3_system_cache');
-        if (cached) {
+    })
+    .catch(err => {
+        // Fallback: ใช้การเรียกผ่าน Script Tag (JSONP) สำหรับกรณีโฮสต์บล็อก Fetch ข้ามโดเมน
+        const callbackName = 'gasCallback_' + new Date().getTime();
+        window[callbackName] = function(jsonpRes) {
             try {
-                let parsed = JSON.parse(cached);
-                applyData(parsed);
-            } catch(e) {}
-        }
-        updateConnectionStatus('error');
-        if (isManualRefresh) {
-            alert('ไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้ในขณะนี้ กรุณาตรวจสอบอินเทอร์เน็ตหรือรีเฟรช');
-        }
-    };
-
-    const targetUrl = GOOGLE_SCRIPT_URL + (GOOGLE_SCRIPT_URL.includes('?') ? '&' : '?') + '_t=' + new Date().getTime();
-
-    // ลำดับที่ 1: ใช้ JSONP ผ่าน Dynamic Script Injection เป็นหลัก ปลอดภัยจากปัญหา CORS บน Web Hosting แน่นอน
-    const callbackName = 'gscript_cb_' + new Date().getTime();
-    let isHandled = false;
-
-    window[callbackName] = function(jsonpData) {
-        if (isHandled) return;
-        isHandled = true;
-        try { delete window[callbackName]; } catch(e) {}
-        const el = document.getElementById(callbackName);
-        if (el && el.parentNode) el.parentNode.removeChild(el);
-        handleSuccess(jsonpData);
-    };
-
-    const script = document.createElement('script');
-    script.id = callbackName;
-    script.src = targetUrl + '&callback=' + callbackName;
-
-    // ลำดับที่ 2: ตั้งเวลา Fallback หาก JSONP ล่าช้าหรือมี Error ให้ลอง Direct Fetch
-    script.onerror = function() {
-        if (isHandled) return;
-        try { delete window[callbackName]; } catch(e) {}
-        if (script.parentNode) script.parentNode.removeChild(script);
-
-        fetch(targetUrl, { method: 'GET', mode: 'cors', cache: 'no-store' })
-        .then(r => r.json())
-        .then(res => {
-            if (!isHandled) {
-                isHandled = true;
-                handleSuccess(res);
-            }
-        })
-        .catch(() => {
-            if (!isHandled) {
-                isHandled = true;
-                handleError();
-            }
-        });
-    };
-
-    setTimeout(() => {
-        if (!isHandled) {
-            fetch(targetUrl, { method: 'GET', mode: 'cors', cache: 'no-store' })
-            .then(r => r.json())
-            .then(res => {
-                if (!isHandled) {
-                    isHandled = true;
-                    try { delete window[callbackName]; } catch(e) {}
-                    if (script.parentNode) script.parentNode.removeChild(script);
-                    handleSuccess(res);
+                localStorage.setItem(cacheKey, JSON.stringify(jsonpRes));
+                applyData(jsonpRes);
+                updateConnectionStatus('ready');
+                if (isManualRefresh) {
+                    renderHistoryTable(globalHistory);
+                    alert('อัปเดตข้อมูลจากส่วนกลางเรียบร้อยแล้ว');
                 }
-            })
-            .catch(() => {
-                if (!isHandled) {
-                    isHandled = true;
-                    try { delete window[callbackName]; } catch(e) {}
-                    if (script.parentNode) script.parentNode.removeChild(script);
-                    handleError();
-                }
-            });
-        }
-    }, 9000);
+            } finally {
+                delete window[callbackName];
+                const s = document.getElementById(callbackName);
+                if (s) s.remove();
+            }
+        };
 
-    document.head.appendChild(script);
+        const jsonpScript = document.createElement('script');
+        jsonpScript.id = callbackName;
+        jsonpScript.src = `${GOOGLE_SCRIPT_URL}?action=getData&callback=${callbackName}&_t=${t}`;
+        jsonpScript.onerror = function() {
+            delete window[callbackName];
+            jsonpScript.remove();
+            if (hasLoadedCache) {
+                // หากมีแคชเดิม ให้ใช้ไปก่อน แต่เตือนสถานะ
+                updateConnectionStatus('ready');
+            } else {
+                updateConnectionStatus('error');
+                if (isManualRefresh) {
+                    alert('ไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้ในขณะนี้ กรุณาตรวจสอบอินเทอร์เน็ตหรือติดต่อผู้ดูแลระบบ');
+                }
+            }
+        };
+        document.body.appendChild(jsonpScript);
+    });
 }
 
 function applyData(data) {
@@ -968,7 +906,6 @@ function applyData(data) {
         return h;
     });
 
-    // ซิงค์ราคาน้ำมันจากระบบส่วนกลาง (ถ้ามี)
     const config = data.config || {};
     if (config.fuelPrice) {
         document.getElementById('fuelPrice').value = parseFloat(config.fuelPrice) || 33.50;
@@ -1338,12 +1275,13 @@ function renderCart() {
 /**
  * =========================================================================
  * CORE ENGINE: คำนวณพิกัดบรรทุก ปรับเที่ยวเศษให้ประหยัดที่สุด และบันทึก
+ * ระบบตรวจสอบความพร้อมในการเชื่อมต่อฐานข้อมูลส่วนกลางอย่างแท้จริงก่อนคำนวณ
  * =========================================================================
  */
 function calculateFreight(isAutoSave = false) {
-    // ล็อกเด็ดขาด: ถ้าระบบยังไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้จริง จะไม่สามารถคำนวณราคาได้
+    // 4) หากระบบยังไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้จริง จะไม่สามารถคำนวณได้
     if (!isDatabaseReady) {
-        alert('⚠️ ระบบยังไม่สามารถเชื่อมต่อกับฐานข้อมูลส่วนกลางได้จริง จึงไม่สามารถดำเนินการคำนวณราคาได้ครับ\n\nกรุณารอสักครู่ให้แถบสถานะเปลี่ยนเป็นสีเขียว หรือกดรีเฟรชที่แถบสถานะเพื่อลองเชื่อมต่อใหม่อีกครั้ง');
+        alert('⚠️ ระบบยังไม่สามารถเชื่อมต่อกับฐานข้อมูลส่วนกลางได้จริง\nกรุณารอสักครู่ให้ระบบเชื่อมต่อสำเร็จ หรือกดปุ่ม "รีเฟรช" ที่แถบสถานะด้านบนก่อนเริ่มคำนวณราคา');
         return;
     }
 
@@ -1605,7 +1543,6 @@ function calculateFreight(isAutoSave = false) {
     const totalFreight = roundTax(plannedTrucks.reduce((s, t) => s + t.cost, 0));
     window.lastPlannedTrucks = plannedTrucks;
 
-    // สร้างข้อความแผนการจัดส่ง TruckPlan เพื่อส่งบันทึกและแสดงผล
     let truckPlanLines = plannedTrucks.map((t, idx) => {
         let tName = truckNameMap[t.type] || t.type;
         let itDesc = t.items.map(it => `${it.name} (${it.qty.toLocaleString()} ${it.unit})`).join(', ');
@@ -1897,13 +1834,19 @@ function saveToGoogleSheets(isManual = false) {
         resultItems: JSON.stringify(items)
     };
 
-    sendToBackend(payload)
+    fetch(GOOGLE_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+        redirect: 'follow'
+    })
+    .then(r => r.json())
     .then(res => {
         if (btn) {
             btn.disabled = false;
             btn.innerText = '💾 บันทึกส่วนกลาง';
         }
-        if (res && res.status === 'success') {
+        if (res.status === 'success') {
             payload.id = res.id || new Date().getTime();
             payload._histId = 'hist_new_' + payload.id;
             globalHistory.unshift(payload);
@@ -1949,7 +1892,7 @@ function toggleHistory() {
     modal.classList.toggle('flex');
     if (!modal.classList.contains('hidden')) {
         const isAdmin = currentUser.role === 'admin';
-        document.getElementById('historyScopeBadge').innerText = isAdmin ? 'สิทธิ์ Admin: แสดงประวัติทั้งหมด' : 'สิทธิ์ User: แสดงเฉพาะประวัติของตนเอง';
+        document.getElementById('historyScopeBadge').innerText = isAdmin ? 'สิทธิ์ Admin: แสดงประวัติทั้งหมด (สามารถดูและแก้ไขของ User ได้)' : 'สิทธิ์ User: แสดงเฉพาะประวัติของตนเอง';
         renderHistoryTable(globalHistory);
     }
 }
@@ -2011,33 +1954,59 @@ function filterHistory() {
 }
 
 /**
- * Universal Item Extractor แก้ปัญหา JSON Syntax Error และดึงข้อมูลของ Role User ได้ครบ 100%
+ * 2) ปรับปรุงให้ Role Admin สามารถกดดูใบเสนอราคาของ Role User ได้อย่างสมบูรณ์แบบ
+ * และเปิดให้ Role User สามารถเข้าดูรายละเอียดใบเสนอราคาของตนเองได้อย่างครบถ้วน
  */
-function extractHistoryItems(item) {
+function viewHistoryDetail(id) {
+    const item = globalHistory.find(h => h._histId === id) || 
+                 globalHistory.find((h, idx) => (h.id && h.id.toString() === id.toString()) || idx.toString() === id.toString());
+    if (!item) return alert('ไม่พบข้อมูลประวัติรายการนี้');
+
+    const isAdmin = currentUser.role === 'admin';
     let resItems = [];
 
-    // Helper: Safe JSON Parse เพื่อป้องกันการพังจาก Format ผิดรูป
-    const safeParse = (str) => {
-        if (!str || str === '-') return null;
-        try {
-            let res = JSON.parse(str);
-            if (typeof res === 'string') res = JSON.parse(res);
-            return res;
-        } catch(e) {
-            return null;
+    // 1. ดึงจาก resultItems หรือ ResultItems (JSON Object)
+    try {
+        let parsed = item.resultItems || item.ResultItems;
+        if (parsed) {
+            if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+            if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+            if (Array.isArray(parsed) && parsed.length > 0) resItems = parsed;
         }
-    };
+    } catch(e) {}
 
-    // 1. ลองดึงจาก resultItems
-    const parsedRes = safeParse(item.resultItems || item.ResultItems);
-    if (Array.isArray(parsedRes) && parsedRes.length > 0) {
-        resItems = parsedRes;
+    // 2. ดึงจาก rawCart หรือ RawCart หรือ cartItems
+    if (resItems.length === 0) {
+        let rc = item.rawCart || item.RawCart || item.cartItems || item.CartItems;
+        if (rc && rc !== '-') {
+            try {
+                let parsedCart = rc;
+                if (typeof parsedCart === 'string') parsedCart = JSON.parse(parsedCart);
+                if (typeof parsedCart === 'string') parsedCart = JSON.parse(parsedCart);
+                if (Array.isArray(parsedCart) && parsedCart.length > 0) {
+                    resItems = parsedCart.map(c => {
+                        const p = productData.find(x => x.id === c.id) || { name: c.id, unit: 'หน่วย', cat: 'ทั่วไป' };
+                        let base = roundTax(getBasePrice(p));
+                        let customNp = parseFloat(c.customPrice || c.netUnitPrice) || base;
+                        let customFr = parseFloat(c.freightPerUnitVal || c.freightPerUnit) || 0;
+                        return {
+                            name: p.name,
+                            qty: c.qty || 0,
+                            unit: p.unit || 'หน่วย',
+                            netUnitPrice: customNp,
+                            freightPerUnit: customFr,
+                            unitPlusFreight: customNp + customFr
+                        };
+                    });
+                }
+            } catch(e) {}
+        }
     }
 
-    // 2. ถ้าไม่มี ให้ดึงจาก ProductNames / productNames
+    // 3. ดึงจากข้อความสตริง ProductNames / productNames
     if (resItems.length === 0) {
         const rawNames = item.productNames || item.ProductNames;
-        if (rawNames && rawNames !== '-' && typeof rawNames === 'string') {
+        if (rawNames && rawNames !== '-') {
             const sep = rawNames.includes('\n') ? '\n' : (rawNames.includes(' | ') ? ' | ' : ',');
             const names = rawNames.split(sep);
             const qtys = (item.productQtys || item.ProductQtys || '').split(sep);
@@ -2047,15 +2016,16 @@ function extractHistoryItems(item) {
 
             resItems = names.map((nm, i) => {
                 let cleanNm = nm.replace(/\s\(\+แถม\s\d+\)$/, '').trim();
-                let qStr = (qtys[i] || '0').split(' ')[0].replace(/,/g, '');
-                let uStr = (qtys[i] || '0').split(' ')[1] || 'หน่วย';
+                let qParts = (qtys[i] || '0').trim().split(' ');
+                let qVal = parseFloat((qParts[0] || '0').replace(/,/g, '')) || 0;
+                let uVal = qParts[1] || 'หน่วย';
                 let np = parseFloat((netPrices[i] || '0').replace(/,/g, '')) || 0;
                 let fr = parseFloat((freights[i] || '0').replace(/,/g, '')) || 0;
                 let up = parseFloat((unitPlus[i] || '0').replace(/,/g, '')) || (np + fr);
                 return {
                     name: cleanNm,
-                    qty: parseFloat(qStr) || 0,
-                    unit: uStr,
+                    qty: qVal,
+                    unit: uVal,
                     netUnitPrice: np,
                     freightPerUnit: fr,
                     unitPlusFreight: up
@@ -2064,69 +2034,40 @@ function extractHistoryItems(item) {
         }
     }
 
-    // 3. ถ้าไม่มี ให้ดึงจาก rawCart หรือ cartItems
+    // 4. กรณีพิเศษ: หากบันทึกมาเป็นเครื่องหมาย '-' ให้ Reconstruct รายการจาก TruckPlan
     if (resItems.length === 0) {
-        const parsedCart = safeParse(item.rawCart || item.RawCart || item.cartItems || item.CartItems);
-        if (Array.isArray(parsedCart) && parsedCart.length > 0) {
-            resItems = parsedCart.map(c => {
-                const p = productData.find(x => x.id === c.id) || { name: c.id, unit: 'หน่วย', cat: 'ทั่วไป' };
+        const tp = item.truckPlan || item.TruckPlan;
+        if (tp && tp !== '-') {
+            let extractedMap = {};
+            tp.split('\n').forEach(line => {
+                let m = line.match(/\[.*?\]:\s*(.*)/);
+                if (m && m[1]) {
+                    m[1].split(',').forEach(sub => {
+                        let segMatch = sub.trim().match(/^(.*?)\s*\((\d+[\d,]*)\s*(.*?)\)$/);
+                        if (segMatch) {
+                            let pName = segMatch[1].trim();
+                            let pQty = parseFloat(segMatch[2].replace(/,/g, '')) || 0;
+                            let pUnit = segMatch[3].trim();
+                            if (!extractedMap[pName]) extractedMap[pName] = { name: pName, qty: 0, unit: pUnit };
+                            extractedMap[pName].qty += pQty;
+                        }
+                    });
+                }
+            });
+            Object.values(extractedMap).forEach(em => {
+                let p = productData.find(x => x.name === em.name) || { unit: em.unit };
                 let base = roundTax(getBasePrice(p));
-                let customNp = parseFloat(c.customPrice || c.netUnitPrice) || base;
-                let customFr = parseFloat(c.freightPerUnitVal || c.freightPerUnit) || 0;
-                return {
-                    name: p.name,
-                    qty: c.qty || 0,
-                    unit: p.unit || 'หน่วย',
-                    netUnitPrice: customNp,
-                    freightPerUnit: customFr,
-                    unitPlusFreight: customNp + customFr
-                };
+                resItems.push({
+                    name: em.name,
+                    qty: em.qty,
+                    unit: em.unit,
+                    netUnitPrice: base,
+                    freightPerUnit: 0,
+                    unitPlusFreight: base
+                });
             });
         }
     }
-
-    // 4. Fallback ฉุกเฉิน: ดึงรายการจาก TruckPlan หากฟิลด์อื่นถูกบันทึกเป็น '-'
-    if (resItems.length === 0) {
-        const tp = item.truckPlan || item.TruckPlan;
-        if (tp && tp !== '-' && typeof tp === 'string') {
-            const matches = tp.matchAll(/([^,:\n\[\]]+)\s*\((\d+[\d,]*)\s*([^)]+)\)/g);
-            for (const match of matches) {
-                let pName = match[1].trim();
-                let pQty = parseFloat(match[2].replace(/,/g, '')) || 0;
-                let pUnit = match[3].trim();
-                if (pName && pQty > 0) {
-                    let exist = resItems.find(x => x.name === pName);
-                    if (exist) {
-                        exist.qty += pQty;
-                    } else {
-                        resItems.push({
-                            name: pName,
-                            qty: pQty,
-                            unit: pUnit,
-                            netUnitPrice: 0,
-                            freightPerUnit: 0,
-                            unitPlusFreight: 0
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    return resItems;
-}
-
-/**
- * ปรับปรุงให้ Role Admin สามารถกดดูใบเสนอราคาของ Role User ได้ครบถ้วนทุกรายการ
- * และ Role User สามารถดูรายการของตนเองได้ครบทุกอัน
- */
-function viewHistoryDetail(id) {
-    const item = globalHistory.find(h => h._histId === id) || 
-                 globalHistory.find((h, idx) => (h.id && h.id.toString() === id.toString()) || idx.toString() === id.toString());
-    if (!item) return alert('ไม่พบข้อมูลประวัติรายการนี้');
-
-    const isAdmin = currentUser.role === 'admin';
-    const resItems = extractHistoryItems(item);
 
     let itemsTableHtml = '';
     resItems.forEach(it => {
@@ -2139,9 +2080,9 @@ function viewHistoryDetail(id) {
 
         itemsTableHtml += `<tr class="border-b">
             <td class="p-2 font-medium">${it.name || '-'}</td>
-            <td class="p-2 text-right font-bold">${qty.toLocaleString()} ${it.unit || ''}</td>
+            <td class="p-2 text-right font-bold text-blue-800">${qty.toLocaleString()} ${it.unit || ''}</td>
             ${isAdmin ? `<td class="p-2 text-right text-indigo-700">${netUnitPrice.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td>` : ''}
-            ${isAdmin ? `<td class="p-2 text-right">${netTotal.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td>` : ''}
+            ${isAdmin ? `<td class="p-2 text-right text-gray-700">${netTotal.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td>` : ''}
             ${isAdmin ? `<td class="p-2 text-right text-orange-600">${freightPerUnit.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td>` : ''}
             <td class="p-2 text-right font-bold text-green-900 bg-green-50">${unitPlusFreight.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td>
             <td class="p-2 text-right font-bold text-green-950 bg-green-100">${finalTotal.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td>
@@ -2156,10 +2097,10 @@ function viewHistoryDetail(id) {
             <p class="text-xs text-gray-500">บันทึกเมื่อ: ${item.timestamp || item.Timestamp || '-'}</p>
         </div>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-3 rounded-lg text-xs">
-            <div><span class="text-gray-500 block">โครงการ:</span><b class="text-blue-900">${item.project || item.Project || '-'}</b></div>
+            <div><span class="text-gray-500 block">โครงการ:</span><b class="text-blue-900 text-sm">${item.project || item.Project || '-'}</b></div>
             <div><span class="text-gray-500 block">ลูกค้า:</span><b>${item.customerCompany || item.CustomerCompany || '-'}</b></div>
             <div><span class="text-gray-500 block">กลุ่มลูกค้า:</span><b>${item.customerGroup || item.CustomerGroup || '-'}</b></div>
-            <div><span class="text-gray-500 block">ผู้จัดทำ:</span><b>${item.sale || item.Sale || item.username || '-'}</b></div>
+            <div><span class="text-gray-500 block">ผู้จัดทำ:</span><b class="text-indigo-800">${item.sale || item.Sale || item.username || '-'}</b></div>
             <div><span class="text-gray-500 block">โรงงาน:</span><b>${item.factory || item.Factory || '-'}</b></div>
             <div><span class="text-gray-500 block">ประเภทจัดส่ง:</span><b>${item.delivery || item.Delivery || '-'}</b></div>
             <div><span class="text-gray-500 block">ปลายทาง:</span><b>${item.province || item.Province || '-'} / ${item.district || item.District || '-'}</b></div>
@@ -2168,16 +2109,16 @@ function viewHistoryDetail(id) {
         </div>
 
         <div>
-            <h5 class="font-bold text-xs mb-1 text-gray-700">รายการสินค้า</h5>
+            <h5 class="font-bold text-xs mb-1 text-gray-700">รายการสินค้าและราคา</h5>
             <div class="border rounded-lg overflow-x-auto">
                 <table class="w-full text-xs text-left">
                     <thead class="bg-gray-100 text-gray-700">
                         <tr>
                             <th class="p-2">สินค้า</th>
                             <th class="p-2 text-right">จำนวน</th>
-                            ${isAdmin ? '<th class="p-2 text-right">ราคา/หน่วย (บ.)</th>' : ''}
-                            ${isAdmin ? '<th class="p-2 text-right">มูลค่ารวม (บ.)</th>' : ''}
-                            ${isAdmin ? '<th class="p-2 text-right">ค่าส่ง/หน่วย (บ.)</th>' : ''}
+                            ${isAdmin ? '<th class="p-2 text-right text-indigo-700">ราคา/หน่วย (บ.)</th>' : ''}
+                            ${isAdmin ? '<th class="p-2 text-right text-gray-700">มูลค่ารวม (บ.)</th>' : ''}
+                            ${isAdmin ? '<th class="p-2 text-right text-orange-600">ค่าส่ง/หน่วย (บ.)</th>' : ''}
                             <th class="p-2 text-right bg-green-50 text-green-900 font-bold">ราคา/หน่วย+ขนส่ง</th>
                             <th class="p-2 text-right bg-green-100 text-green-950 font-bold">ยอดเงินรวมสุทธิ (บ.)</th>
                         </tr>
@@ -2216,7 +2157,8 @@ function closeHistoryViewModal() {
 }
 
 /**
- * ปรับปรุง Role Admin เข้าไปแก้ไข Record ของ User ให้คืนค่าทุกอย่างตามต้นฉบับเดิม 100%
+ * 3) ปรับปรุงประวัติการคำนวณย้อนหลังส่วนกลาง การกดแก้ไข ให้ดึงข้อมูลเดิมทุกประการกลับมาแก้ไข
+ * รวมถึงประเภทรถ รายการสินค้า และจำนวนทั้งหมด พร้อมนำใบรายการคำนวณกลับมาแสดงผลทันที
  */
 function loadHistoryToEdit(id) {
     const item = globalHistory.find(h => h._histId === id) || 
@@ -2224,7 +2166,7 @@ function loadHistoryToEdit(id) {
     if (!item) return alert('ไม่พบข้อมูลประวัติรายการนี้');
 
     const projName = item.project || item.Project || 'ไม่มีชื่อ';
-    if (!confirm(`คุณต้องการนำข้อมูลของโครงการ "${projName}" กลับมาแก้ไขในแบบฟอร์มหรือไม่?\nระบบจะดึงข้อมูลเดิมทั้งหมดรวมถึงประเภทรถและราคาตามต้นฉบับ`)) {
+    if (!confirm(`คุณต้องการนำข้อมูลของโครงการ "${projName}" กลับมาแก้ไขในแบบฟอร์มหรือไม่?\nระบบจะดึงข้อมูลเดิมทั้งหมดรวมถึงประเภทรถและรายการสินค้าตามต้นฉบับ`)) {
         return;
     }
 
@@ -2315,23 +2257,112 @@ function loadHistoryToEdit(id) {
         document.getElementById('truckOptTrailer').checked = true;
     }
 
-    // ดึงค่าขนส่งอัตโนมัติประจำเส้นทางและราคาน้ำมัน
+    // ดึงค่าขนส่งประจำเส้นทาง
     autoLookupFreight();
 
-    // 10. คืนค่ารายการสินค้าในตะกร้าจากต้นฉบับเดิมผ่าน Universal Extractor
+    // 10. คืนค่ารายการสินค้าในตะกร้าจากต้นฉบับเดิม
     let loadedCart = [];
-    const extracted = extractHistoryItems(item);
-    if (extracted && extracted.length > 0) {
-        loadedCart = extracted.map(it => {
-            let pMatch = productData.find(p => p.name === it.name) || { id: it.id || it.name };
-            return {
-                id: pMatch.id,
-                qty: parseFloat(it.qty) || 0,
-                freeQty: parseFloat(it.freeQty) || 0,
-                customPrice: parseFloat(it.netUnitPrice) || null,
-                freightPerUnitVal: parseFloat(it.freightPerUnit || it.freightPerUnitVal) || null
-            };
-        }).filter(c => c.id && c.qty > 0);
+
+    // ดึงจาก rawCart หรือ RawCart หรือ cartItems
+    try {
+        let rc = item.rawCart || item.RawCart || item.cartItems || item.CartItems;
+        if (typeof rc === 'string') rc = JSON.parse(rc);
+        if (typeof rc === 'string') rc = JSON.parse(rc);
+        if (Array.isArray(rc) && rc.length > 0) {
+            loadedCart = rc.map(c => ({
+                id: c.id,
+                qty: parseFloat(c.qty) || 0,
+                freeQty: parseFloat(c.freeQty) || 0,
+                customPrice: parseFloat(c.customPrice || c.netUnitPrice) || null,
+                freightPerUnitVal: parseFloat(c.freightPerUnitVal || c.freightPerUnit) || null
+            })).filter(c => c.id);
+        }
+    } catch(e) {}
+
+    // ดึงจาก resultItems
+    if (loadedCart.length === 0) {
+        try {
+            let resIt = item.resultItems || item.ResultItems;
+            if (typeof resIt === 'string') resIt = JSON.parse(resIt);
+            if (typeof resIt === 'string') resIt = JSON.parse(resIt);
+            if (Array.isArray(resIt) && resIt.length > 0) {
+                loadedCart = resIt.map(r => {
+                    let pMatch = productData.find(p => p.name === r.name) || { id: r.id };
+                    return {
+                        id: pMatch.id,
+                        qty: parseFloat(r.qty) || 0,
+                        freeQty: parseFloat(r.freeQty) || 0,
+                        customPrice: parseFloat(r.netUnitPrice) || null,
+                        freightPerUnitVal: parseFloat(r.freightPerUnit || r.freightPerUnitVal) || null
+                    };
+                }).filter(c => c.id);
+            }
+        } catch(e) {}
+    }
+
+    // ดึงจากสตริงข้อความ ProductNames
+    if (loadedCart.length === 0) {
+        const rawNames = item.productNames || item.ProductNames;
+        if (rawNames && rawNames !== '-') {
+            const sep = rawNames.includes('\n') ? '\n' : (rawNames.includes(' | ') ? ' | ' : ',');
+            const names = rawNames.split(sep);
+            const qtys = (item.productQtys || item.ProductQtys || '').split(sep);
+            const prices = (item.productNetPrices || item.ProductNetPrices || '').split(sep);
+            const freights = (item.productFreightPerUnits || item.ProductFreightPerUnits || '').split(sep);
+
+            names.forEach((nm, idx) => {
+                let cleanNm = nm.replace(/\s\(\+แถม\s\d+\)$/, '').trim();
+                if (!cleanNm || cleanNm === '-') return;
+                let freeMatch = nm.match(/\(\+แถม\s*(\d+)\)/);
+                let freeVal = freeMatch ? parseInt(freeMatch[1]) : 0;
+                let pMatch = productData.find(p => p.name === cleanNm || cleanNm.includes(p.name));
+                let qVal = parseFloat((qtys[idx] || '0').replace(/[^\d\.]/g, '')) || 0;
+                let np = parseFloat((prices[idx] || '0').replace(/,/g, '')) || null;
+                let fr = parseFloat((freights[idx] || '0').replace(/,/g, '')) || null;
+
+                if (pMatch && qVal > 0) {
+                    loadedCart.push({
+                        id: pMatch.id,
+                        qty: qVal,
+                        freeQty: freeVal,
+                        customPrice: np,
+                        freightPerUnitVal: fr
+                    });
+                }
+            });
+        }
+    }
+
+    // ดึงจาก TruckPlan
+    if (loadedCart.length === 0) {
+        const tp = item.truckPlan || item.TruckPlan;
+        if (tp && tp !== '-') {
+            let extractedMap = {};
+            tp.split('\n').forEach(line => {
+                let m = line.match(/\[.*?\]:\s*(.*)/);
+                if (m && m[1]) {
+                    m[1].split(',').forEach(sub => {
+                        let segMatch = sub.trim().match(/^(.*?)\s*\((\d+[\d,]*)\s*(.*?)\)$/);
+                        if (segMatch) {
+                            let pName = segMatch[1].trim();
+                            let pQty = parseFloat(segMatch[2].replace(/,/g, '')) || 0;
+                            if (!extractedMap[pName]) extractedMap[pName] = 0;
+                            extractedMap[pName] += pQty;
+                        }
+                    });
+                }
+            });
+            Object.keys(extractedMap).forEach(pName => {
+                let pMatch = productData.find(p => p.name === pName);
+                if (pMatch && extractedMap[pName] > 0) {
+                    loadedCart.push({
+                        id: pMatch.id,
+                        qty: extractedMap[pName],
+                        freeQty: 0
+                    });
+                }
+            });
+        }
     }
 
     if (loadedCart.length > 0) {
@@ -2341,10 +2372,10 @@ function loadHistoryToEdit(id) {
 
     closeHistory();
 
-    // 11. รันคำนวณและแสดงผลต้นฉบับออกมาทันที
+    // 11. รันการคำนวณและแสดงผลใบรายการคำนวณออกมาทันที
     calculateFreight(false);
 
-    // ประยุกต์ค่าแก้ไขเดิม (ถ้ามี) เข้าตารางผลลัพธ์
+    // ปรับราคาเดิมกลับเข้าตารางผลลัพธ์
     if (loadedCart.length > 0 && window.currentResultItems) {
         let hasCustom = false;
         loadedCart.forEach(c => {
@@ -2376,7 +2407,7 @@ function loadHistoryToEdit(id) {
         }
     }
 
-    alert('โหลดข้อมูลต้นฉบับสำเร็จเรียบร้อยแล้ว ทุกฟิลด์และประเภทรถตรงตามต้นฉบับเดิม');
+    alert('ดึงข้อมูลเดิมทุกประการกลับมาแก้ไขเรียบร้อยแล้ว ทั้งประเภทรถ รายการสินค้า และใบรายการคำนวณ');
 }
 
 function deleteHistoryItem(id) {
@@ -2397,9 +2428,15 @@ function deleteHistoryItem(id) {
         } catch(e) {}
     }
 
-    sendToBackend({ action: 'deleteHistory', id: id, project: item ? (item.project || item.Project) : '' })
+    fetch(GOOGLE_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'deleteHistory', id: id, project: item ? (item.project || item.Project) : '' }),
+        redirect: 'follow'
+    })
+    .then(r => r.json())
     .then(res => {
-        if (res && res.status === 'success') {
+        if (res.status === 'success') {
             alert('ลบรายการประวัติสำเร็จ');
         }
     })
@@ -2431,15 +2468,21 @@ function handleChangePassword(event) {
         return;
     }
 
-    sendToBackend({ action: 'changePassword', username: currentUser.username, oldPassword: oldP, newPassword: newP })
+    fetch(GOOGLE_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'changePassword', username: currentUser.username, oldPassword: oldP, newPassword: newP }),
+        redirect: 'follow'
+    })
+    .then(r => r.json())
     .then(res => {
-        if (res && res.status === 'success') {
+        if (res.status === 'success') {
             msg.innerText = 'เปลี่ยนรหัสผ่านสำเร็จ';
             msg.className = 'text-xs text-center font-semibold text-green-600';
             msg.classList.remove('hidden');
             setTimeout(closeChangePasswordModal, 1500);
         } else {
-            msg.innerText = (res && res.message) ? res.message : 'เกิดข้อผิดพลาด';
+            msg.innerText = res.message || 'เกิดข้อผิดพลาด';
             msg.className = 'text-xs text-center font-semibold text-red-500';
             msg.classList.remove('hidden');
         }
