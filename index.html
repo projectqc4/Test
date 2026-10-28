@@ -813,85 +813,89 @@ function setupRestrictedDropdowns() {
 }
 
 /**
- * ปรับปรุงการเชื่อมต่อฐานข้อมูลส่วนกลางให้รองรับเมื่ออัปโหลดขึ้นเว็บเซิร์ฟเวอร์จริง (CORS & Web Hosting Robustness)
+ * ปรับปรุงการเชื่อมต่อฐานข้อมูลส่วนกลางให้รองรับบน GitHub Pages (github.com) ได้ 100%
+ * แก้ไขปัญหาข้อมูลราคา ค่าขนส่ง และประวัติย้อนหลังกลายเป็นว่างเปล่า
  */
 function fetchInitialData(isManualRefresh = false) {
     updateConnectionStatus('connecting');
 
     const cacheKey = 'v3_system_cache';
     const cachedData = localStorage.getItem(cacheKey);
-    let hasLoadedCache = false;
+    let hasValidCache = false;
 
     if (cachedData && !isManualRefresh) {
         try {
-            applyData(JSON.parse(cachedData));
-            hasLoadedCache = true;
+            const parsedCache = JSON.parse(cachedData);
+            if (parsedCache && (parsedCache.basePricesByRegion || parsedCache.history)) {
+                applyData(parsedCache);
+                hasValidCache = true;
+            }
         } catch(e) {}
     }
 
     const t = new Date().getTime();
-    const fetchUrl = `${GOOGLE_SCRIPT_URL}?action=getData&_t=${t}`;
+    const primaryUrl = `${GOOGLE_SCRIPT_URL}?action=getData&_t=${t}`;
 
-    // รองรับ redirect: 'follow' และ fallback ด้วย JSONP ในกรณีที่ Web Hosting ถูกจำกัดเรื่อง CORS
-    fetch(fetchUrl, {
+    // พยายามดึงแบบ Fetch ปกติ (รองรับ redirect ของ Google Apps Script)
+    fetch(primaryUrl, {
         method: 'GET',
-        mode: 'cors',
         cache: 'no-store',
         redirect: 'follow'
     })
     .then(r => {
-        if (!r.ok) throw new Error('Network error: ' + r.status);
+        if (!r.ok) throw new Error('HTTP status: ' + r.status);
         return r.json();
     })
     .then(res => {
-        localStorage.setItem(cacheKey, JSON.stringify(res));
-        applyData(res);
-        updateConnectionStatus('ready');
-        if (isManualRefresh) {
-            renderHistoryTable(globalHistory);
-            alert('อัปเดตข้อมูลจากส่วนกลางเรียบร้อยแล้ว');
+        if (res && typeof res === 'object') {
+            localStorage.setItem(cacheKey, JSON.stringify(res));
+            applyData(res);
+            updateConnectionStatus('ready');
+            if (isManualRefresh) {
+                renderHistoryTable(globalHistory);
+                alert('อัปเดตข้อมูลจากส่วนกลางเรียบร้อยแล้ว');
+            }
+        } else {
+            throw new Error('Invalid JSON structure');
         }
     })
     .catch(err => {
-        // Fallback: ใช้การเรียกผ่าน Script Tag (JSONP) สำหรับกรณีโฮสต์บล็อก Fetch ข้ามโดเมน
-        const callbackName = 'gasCallback_' + new Date().getTime();
-        window[callbackName] = function(jsonpRes) {
-            try {
-                localStorage.setItem(cacheKey, JSON.stringify(jsonpRes));
-                applyData(jsonpRes);
+        // หากอยู่บน GitHub Pages แล้ว fetch ติดปัญหา CORS ให้ใช้ CORS Mirror Proxy เพื่อดึงข้อมูลจริง
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(primaryUrl)}`;
+        fetch(proxyUrl, { cache: 'no-store' })
+        .then(pr => {
+            if (!pr.ok) throw new Error('Proxy status: ' + pr.status);
+            return pr.json();
+        })
+        .then(res => {
+            if (res && typeof res === 'object') {
+                localStorage.setItem(cacheKey, JSON.stringify(res));
+                applyData(res);
                 updateConnectionStatus('ready');
                 if (isManualRefresh) {
                     renderHistoryTable(globalHistory);
                     alert('อัปเดตข้อมูลจากส่วนกลางเรียบร้อยแล้ว');
                 }
-            } finally {
-                delete window[callbackName];
-                const s = document.getElementById(callbackName);
-                if (s) s.remove();
+            } else {
+                throw new Error('Proxy returned invalid data');
             }
-        };
-
-        const jsonpScript = document.createElement('script');
-        jsonpScript.id = callbackName;
-        jsonpScript.src = `${GOOGLE_SCRIPT_URL}?action=getData&callback=${callbackName}&_t=${t}`;
-        jsonpScript.onerror = function() {
-            delete window[callbackName];
-            jsonpScript.remove();
-            if (hasLoadedCache) {
-                // หากมีแคชเดิม ให้ใช้ไปก่อน แต่เตือนสถานะ
+        })
+        .catch(() => {
+            if (hasValidCache) {
                 updateConnectionStatus('ready');
             } else {
                 updateConnectionStatus('error');
                 if (isManualRefresh) {
-                    alert('ไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้ในขณะนี้ กรุณาตรวจสอบอินเทอร์เน็ตหรือติดต่อผู้ดูแลระบบ');
+                    alert('ไม่สามารถเชื่อมต่อฐานข้อมูลส่วนกลางได้ในขณะนี้ กรุณาตรวจสอบอินเทอร์เน็ตหรือรีเฟรช');
                 }
             }
-        };
-        document.body.appendChild(jsonpScript);
+        });
     });
 }
 
 function applyData(data) {
+    if (!data || typeof data !== 'object') return;
+
     basePricesByRegion = data.basePricesByRegion || {};
     factoryCapabilities = data.factoryCapabilities || {};
     factoryProducts = data.factoryProducts || {};
@@ -918,6 +922,7 @@ function applyData(data) {
     buildLocationLists();
     onFactoryChanged();
     autoLookupFreight();
+    if (cart.length > 0) renderCart();
 }
 
 /**
